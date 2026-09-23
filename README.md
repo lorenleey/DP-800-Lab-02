@@ -12,6 +12,9 @@ Este laboratorio forma parte de la preparación para la certificación **Microso
 
 `MicrosoftLearning/mslearn-sql-developer`
 
+Se puede acceder al archivo `.sql` para replicarlo
+[SQL Lab 2](sql/DP800_Lab02.sql)
+
 # Desarrollo del laboratorio
 
 ## 1. Verificación de AdventureWorksLT
