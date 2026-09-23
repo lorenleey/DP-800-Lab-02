@@ -231,4 +231,198 @@ Resultado de la ejecución
 
 ![Función Escalar ejecución](img/funcion-escalar.png) 
 
+## 5. Creación de una Table-Valued Function
+
+Se creó la función:`dbo.GetCustomerOrders`
+
+Esta función recibe un `CustomerID` y devuelve los pedidos correspondientes al cliente.
+
+```sql
+CREATE OR ALTER FUNCTION dbo.GetCustomerOrders (@CustomerID INT)
+RETURNS TABLE
+AS
+RETURN
+(
+    SELECT 
+        h.SalesOrderID,
+        h.OrderDate
+    FROM SalesLT.SalesOrderHeader h
+    WHERE h.CustomerID = @CustomerID
+);
+```
+
+Probar la función con valores de tabla.
+
+```sql
+SELECT *
+FROM dbo.GetCustomerOrders(29929)
+ORDER BY OrderDate DESC;
+```
+
+También se utilizó con `CROSS APPLY`:
+
+```sql
+SELECT 
+    CONCAT(c.FirstName, ' ', c.LastName) AS CustomerName,
+    o.SalesOrderID,
+    o.OrderDate
+FROM SalesLT.Customer c
+CROSS APPLY dbo.GetCustomerOrders(c.CustomerID) o
+WHERE c.CustomerID = 29929;
+```
+
+La función permite utilizar un resultado parametrizado como si fuera una tabla dentro de otras consultas.
+
+Resultado de las consultas con la función
+![Función de valores de tabla ejecución](img/funcion-valores-tabla.png) 
+
+## 6. Creación de un Trigger
+
+Se creó una tabla de auditoría:`dbo.OrderAudit`
+
+``` sql
+
+IF OBJECT_ID('dbo.OrderAudit') IS NULL
+BEGIN
+    CREATE TABLE dbo.OrderAudit
+    (
+        AuditID   INT IDENTITY(1,1) PRIMARY KEY,
+        OrderID   INT NOT NULL,
+        OldTotal  DECIMAL(18,2) NULL,
+        NewTotal  DECIMAL(18,2) NULL,
+        ChangedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END;
+GO
+```
+El objetivo es registrar automáticamente los cambios en el importe de los pedidos.
+
+La tabla de auditoría almacena:
+
+- Identificador del pedido.
+- Total anterior.
+- Total nuevo.
+- Fecha y hora del cambio.
+- 
+Posteriormente se creó el trigger: `SalesLT.trg_LogOrderTotalChange`
+El trigger identifica los pedidos afectados mediante las
+tablas lógicas inserted y deleted.
+
+Después calcula:
+- El nuevo total.
+- La contribución de las filas nuevas.
+- La contribución de las versiones anteriores.
+
+Finalmente registra el cambio en dbo.OrderAudit.
+
+``` sql
+
+CREATE OR ALTER TRIGGER SalesLT.trg_LogOrderTotalChange
+ON SalesLT.SalesOrderDetail
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    ;WITH AffectedOrders AS
+    (
+        SELECT SalesOrderID
+        FROM inserted
+
+        UNION
+
+        SELECT SalesOrderID
+        FROM deleted
+    ),
+
+    -- Totales actuales después de aplicar el cambio
+    NewTotals AS
+    (
+        SELECT
+            d.SalesOrderID,
+            SUM(d.OrderQty * d.UnitPrice) AS Total
+        FROM SalesLT.SalesOrderDetail AS d
+        INNER JOIN AffectedOrders AS a
+            ON d.SalesOrderID = a.SalesOrderID
+        GROUP BY d.SalesOrderID
+    ),
+
+    -- Contribución de las filas insertadas o modificadas
+    InsertedTotals AS
+    (
+        SELECT
+            SalesOrderID,
+            SUM(OrderQty * UnitPrice) AS Total
+        FROM inserted
+        GROUP BY SalesOrderID
+    ),
+
+    -- Contribución de las versiones anteriores de las filas
+    DeletedTotals AS
+    (
+        SELECT
+            SalesOrderID,
+            SUM(OrderQty * UnitPrice) AS Total
+        FROM deleted
+        GROUP BY SalesOrderID
+    )
+
+    INSERT INTO dbo.OrderAudit
+    (
+        OrderID,
+        OldTotal,
+        NewTotal
+    )
+    SELECT
+        n.SalesOrderID,
+        n.Total - ISNULL(i.Total, 0) + ISNULL(d.Total, 0) AS OldTotal,
+        n.Total AS NewTotal
+    FROM NewTotals AS n
+    LEFT JOIN InsertedTotals AS i
+        ON n.SalesOrderID = i.SalesOrderID
+    LEFT JOIN DeletedTotals AS d
+        ON n.SalesOrderID = d.SalesOrderID;
+END;
+GO
+```
+
+
+
+Para comprobar su funcionamiento se modificó la cantidad de un producto:
+
+```sql
+UPDATE d
+SET OrderQty = OrderQty + 1
+FROM SalesLT.SalesOrderDetail AS d
+WHERE d.SalesOrderID =
+(
+    SELECT TOP (1) SalesOrderID
+    FROM SalesLT.SalesOrderHeader
+    ORDER BY SalesOrderID DESC
+);
+GO
+
+-- Consultar los últimos registros de auditoría
+SELECT TOP (5) *
+FROM dbo.OrderAudit
+ORDER BY AuditID DESC;
+GO
+```
+
+El registro generado confirma que el trigger se ejecutó automáticamente después de la modificación.
+![Prueba del trigger](img/trigger.png)
+
+# Objetos creados
+
+| Tipo | Objeto |
+|---|---|
+| View | `SalesLT.vCustomerOrders` |
+| Stored Procedure | `dbo.AddOrderLineItem` |
+| Scalar Function | `dbo.fnOrderTotal` |
+| Table-Valued Function | `dbo.GetCustomerOrders` |
+| Audit Table | `dbo.OrderAudit` |
+| Trigger | `SalesLT.trg_LogOrderTotalChange` |
+
+---
+
 
